@@ -25,6 +25,7 @@ class G1MimicFuture(G1MimicDistill):
         self.future_cfg = cfg.env
         
         # Initialize masking parameters
+        # 根据cfg是否有定义来初始化的这些状态
         self.curriculum_masking = getattr(cfg.env, 'curriculum_masking', True)
         self.masking_start_iteration = getattr(cfg.env, 'masking_start_iteration', 2000)
         self.masking_end_iteration = getattr(cfg.env, 'masking_end_iteration', 20000)
@@ -118,7 +119,8 @@ class G1MimicFuture(G1MimicDistill):
         motion_ids_tiled = torch.broadcast_to(self._motion_ids.unsqueeze(-1), obs_motion_times.shape)
         motion_ids_tiled = motion_ids_tiled.flatten()
         obs_motion_times = obs_motion_times.flatten()
-        
+
+        # 获取对应id的运动数据
         root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, body_pos, root_pos_delta_local, root_rot_delta_local = \
             self._motion_lib.calc_motion_frame(motion_ids_tiled, obs_motion_times)
         
@@ -216,7 +218,7 @@ class G1MimicFuture(G1MimicDistill):
             
         num_envs, num_future_steps, obs_dim = future_obs.shape
         
-        # Force full masking in evaluation mode
+        # Force full masking in evaluation mode 全部mask
         if self.evaluation_mode and self.force_full_masking:
             self.current_masking_prob = 1.0
             # print(f"Evaluation mode: forcing full masking (prob=1.0)")
@@ -227,7 +229,8 @@ class G1MimicFuture(G1MimicDistill):
                 current_iter = self.global_counter // 24  # Convert to training iterations
             else:
                 current_iter = 0
-                
+            
+            # 随着迭代逐步遮盖掩码
             progress = max(0, min(1, (current_iter - self.masking_start_iteration) / 
                                  max(1, self.masking_end_iteration - self.masking_start_iteration)))
             curriculum_prob = self.min_masking_prob + progress * (self.max_masking_prob - self.min_masking_prob)
@@ -249,7 +252,7 @@ class G1MimicFuture(G1MimicDistill):
             dropout_prob = self.temporal_dropout_start_prob + dropout_progress * \
                           (self.temporal_dropout_end_prob - self.temporal_dropout_start_prob)
             
-            # Random temporal dropout
+            # Random temporal dropout 随机生成是否存在包丢失的掩码
             temporal_mask = torch.rand(num_envs, num_future_steps, device=self.device) > dropout_prob
             self.future_mask = temporal_mask
         
@@ -260,6 +263,7 @@ class G1MimicFuture(G1MimicDistill):
                 progressive_mask = torch.zeros(num_envs, num_future_steps, device=self.device, dtype=torch.bool)
             else:
                 # Create progressive mask - later frames have higher masking probability
+                # 构造一个后面帧更容易被隐藏的mask
                 time_weights = torch.linspace(0, 1, num_future_steps, device=self.device)
                 progressive_probs = self.current_masking_prob * (1 + time_weights)
                 progressive_probs = torch.clamp(progressive_probs, 0, 1)
@@ -269,6 +273,7 @@ class G1MimicFuture(G1MimicDistill):
                 progressive_mask = random_mask > progressive_probs.unsqueeze(0)
             
             # Combine with temporal dropout
+            # 是否需要考虑信息的随机丢包
             if self.temporal_dropout and not (self.evaluation_mode and self.force_full_masking):
                 final_mask = self.future_mask & progressive_mask
             else:
@@ -297,6 +302,7 @@ class G1MimicFuture(G1MimicDistill):
         # Calculate motion state masking probability
         motion_masking_prob = self._get_motion_masking_prob()
         
+        # indicator就是对应id的是否被mask了
         # Process linear velocity
         masked_lin_vel, lin_vel_mask_indicator = self._apply_motion_component_masking(
             self.base_lin_vel, motion_masking_prob
@@ -326,6 +332,7 @@ class G1MimicFuture(G1MimicDistill):
         
         return masked_motion_state
 
+    # 逐步增大motion_mask的概率
     def _get_motion_masking_prob(self):
         """Calculate current motion state masking probability"""
         if hasattr(self, 'global_counter'):
@@ -418,6 +425,7 @@ class G1MimicFuture(G1MimicDistill):
             # Return original format for compatibility
             return priv_mimic_obs, mimic_obs
 
+    # future_obs是对未来的轨迹进行mask，而masked_motion_state_obs是对当前状态进行了mask处理
     def compute_observations(self):
         """Override to include future motion observations while maintaining compatibility."""
         # Get IMU observations (same as parent)
@@ -442,6 +450,7 @@ class G1MimicFuture(G1MimicDistill):
         
         # Add noise if enabled (same as parent)
         if self.cfg.noise.add_noise and self.headless:
+            # 随着训练进行逐步增加噪声
             noise_scale = min(self.total_env_steps_counter / (self.cfg.noise.noise_increasing_steps * 24), 1.)
             proprio_obs_buf += (2 * torch.rand_like(proprio_obs_buf) - 1) * self.noise_scale_vec * noise_scale
         elif self.cfg.noise.add_noise and not self.headless:
@@ -512,6 +521,7 @@ class G1MimicFuture(G1MimicDistill):
             self.obs_buf = torch.cat([obs_buf, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
         
         # Update history buffers (same as parent) - using in-place operations to avoid memory leak
+        # 对于特权的话就是10，如果是学生或者HOI就是1
         if self.cfg.env.history_len > 0:
             # Find episodes that need to be reset
             reset_mask = (self.episode_length_buf <= 1)

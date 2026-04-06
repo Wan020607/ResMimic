@@ -222,6 +222,7 @@ class OnPolicyDaggerRunner:
     #     return base_obs
 
     def full_obs_to_base_obs(self, obs):
+        # 这个设置的是true
         if not self.policy_cfg["nonblind"]:
             return obs
         n_obs_single = self.policy_cfg["n_obs_single"]
@@ -344,6 +345,7 @@ class OnPolicyDaggerRunner:
             regularization_scale = self.env.cfg.rewards.regularization_scale if hasattr(self.env.cfg.rewards, "regularization_scale") else 1
             average_episode_length = torch.mean(self.env.episode_length.float()).item() if hasattr(self.env, "episode_length") else 0
             mean_motion_difficulty = self.env.mean_motion_difficulty if hasattr(self.env, "mean_motion_difficulty") else 0
+            mean_virtual_force_kp = torch.mean(self.env.kp_object.float()).item() if hasattr(self.env, "kp_object") else 0
             mean_value_loss, mean_surrogate_loss, mean_priv_reg_loss, priv_reg_coef, mean_grad_penalty_loss, grad_penalty_coef, kl_teacher_student_loss = self.alg.update()
     
             stop = time.time()
@@ -415,6 +417,9 @@ class OnPolicyDaggerRunner:
         
         if locs['mean_motion_difficulty'] != 0:
             wandb_dict['Scale/motion_difficulty'] = locs["mean_motion_difficulty"]
+
+        if locs['mean_virtual_force_kp'] != 0:
+            wandb_dict['Scale/virtual_force_kp'] = locs["mean_virtual_force_kp"]
 
         wandb_dict['Policy/mean_noise_std'] = mean_std.item()
         wandb_dict['Perf/total_fps'] = fps

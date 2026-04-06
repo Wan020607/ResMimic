@@ -342,6 +342,7 @@ class G1MimicPrivCfg(HumanoidMimicCfg):
         motion_smooth = True
         motion_decompose = False
 
+        # 这个数据集并没有开放
         motion_file = f"{LEGGED_GYM_ROOT_DIR}/motion_data_configs/g1_amass_omomo_1.0.yaml"
         
         

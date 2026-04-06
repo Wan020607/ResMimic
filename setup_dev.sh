@@ -1,3 +1,4 @@
+#!/bin/bash
 # Exit on error, and print commands
 set -ex
 
@@ -5,55 +6,59 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # Create overall workspace
 WORKSPACE_DIR=$SCRIPT_DIR/thirdparty
-CONDA_ROOT=$WORKSPACE_DIR/miniconda3
-ENV_ROOT=$CONDA_ROOT/envs/rl-motion
-SENTINEL_FILE=.env_setup_finished
+ENV_NAME=resmimic
+SENTINEL_FILE=$WORKSPACE_DIR/.env_setup_finished
+
+ISAACGYM_PATH="/home/wan/snap/IsaacGym_Preview_4_Package/isaacgym"
 
 mkdir -p $WORKSPACE_DIR
 
+# Check if environment setup has already finished
 if [[ ! -f $SENTINEL_FILE ]]; then
-  # Install miniconda
-  if [[ ! -d $CONDA_ROOT ]]; then
-    mkdir -p $CONDA_ROOT
-    curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o $CONDA_ROOT/miniconda.sh
-    bash $CONDA_ROOT/miniconda.sh -b -u -p $CONDA_ROOT
-    rm $CONDA_ROOT/miniconda.sh
+
+  # Create the conda environment if it doesn't exist
+  if ! conda info --envs | grep -q "$ENV_NAME"; then
+      conda create -y -n $ENV_NAME python=3.8
   fi
 
-  # Create the conda environment
-  if [[ ! -d $ENV_ROOT ]]; then
-    $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
-    $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
-    $CONDA_ROOT/bin/conda install -y mamba -c conda-forge -n base
-    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n rl-motion python=3.8
-  fi
+  # Activate environment
+  source $(conda info --base)/etc/profile.d/conda.sh
+  conda activate $ENV_NAME
 
-  source $CONDA_ROOT/bin/activate rl-motion
-
-  # Install libstdcxx-ng to fix the error: `version `GLIBCXX_3.4.32' not found` on Ubuntu 24.04 
+  # Install libstdcxx-ng to fix GLIBCXX_3.4.32 issue
   conda install -c conda-forge -y libstdcxx-ng
 
-  # Install Isaac Gym
-  if [[ ! -d $WORKSPACE_DIR/isaacgym ]]; then
-    wget https://developer.nvidia.com/isaac-gym-preview-4 -O $WORKSPACE_DIR/IsaacGym_Preview_4_Package.tar.gz
-    tar -xzf $WORKSPACE_DIR/IsaacGym_Preview_4_Package.tar.gz -C $WORKSPACE_DIR
-    cd $WORKSPACE_DIR/isaacgym/python
-    $ENV_ROOT/bin/pip install -e .
+  # Install Isaac Gym from existing path
+  if [[ -d $ISAACGYM_PATH ]]; then
+      cd $ISAACGYM_PATH/python
+      pip install -e .
+  else
+      echo "Error: Isaac Gym path does not exist: $ISAACGYM_PATH"
+      exit 1
   fi
 
+  # Return to script directory
   cd $SCRIPT_DIR
+
+  # Install local editable packages
   pip install -e rsl_rl
   pip install -e legged_gym
   pip install -e pose
 
+  # Install other Python packages
   pip install "numpy==1.23.0" pydelatin wandb tqdm opencv-python ipdb pyfqmr flask dill gdown hydra-core imageio[ffmpeg] mujoco mujoco-python-viewer isaacgym-stubs pytorch-kinematics rich termcolor 
   pip install scipy
   pip install "redis[hiredis]"
+
+  # Install Redis server if not available
   if ! which redis-server; then
-    sudo apt install -y redis-server
+      sudo apt install -y redis-server
   fi
 
-  pip install pyttsx3 # for voice control
+  pip install pyttsx3  # for voice control
   pip install trimesh
+
+
+  # Mark the setup as finished
   touch $SENTINEL_FILE
 fi

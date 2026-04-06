@@ -37,7 +37,7 @@ import os
 from isaacgym.torch_utils import *
 from isaacgym import gymtorch, gymapi, gymutil
 
-import torch, torchvision
+import torch
 from torch import Tensor
 from typing import Tuple, Dict
 
@@ -118,6 +118,7 @@ class LeggedRobot(BaseTask):
 
         actions.to(self.device)
         self.action_history_buf = torch.cat([self.action_history_buf[:, 1:].clone(), actions[:, None, :].clone()], dim=1)
+        # delay会随着时间变化
         if self.cfg.domain_rand.action_delay:
             if self.global_counter % self.cfg.domain_rand.delay_update_global_steps == 0:
                 if len(self.cfg.domain_rand.action_curr_step) != 0:
@@ -177,8 +178,9 @@ class LeggedRobot(BaseTask):
 
         self.roll, self.pitch, self.yaw = euler_from_quaternion(self.base_quat)
 
+        # contact的掩码
         contact = torch.norm(self.contact_forces[:, self.feet_indices], dim=-1) > 2.
-        self.contact_filt = torch.logical_or(contact, self.last_contacts) 
+        self.contact_filt = torch.logical_or(contact, self.last_contacts)       # 过滤接触过程中仿真器计算的不稳定因素
         self.last_contacts = contact
         self._post_physics_step_callback()
 
@@ -901,6 +903,7 @@ class LeggedRobot(BaseTask):
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
             pos = self.env_origins[i].clone()
+            # 在resmimic和fitune当中是添加了的
             if self.cfg.env.randomize_start_pos:
                 pos[:2] += torch_rand_float(-1., 1., (2,1), device=self.device).squeeze(1)
             if self.cfg.env.randomize_start_yaw:

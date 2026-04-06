@@ -60,6 +60,7 @@ class HumanoidChar(LeggedRobot):
         
         self._ref_body_pos = torch.zeros_like(self.rigid_body_states[..., :3])
         self.feet_force_sum = torch.ones(self.num_envs, 2, device=self.device)
+        # 按照twist2论文当中一样，分为上下半身来进行
         key_bodies = self.cfg.motion.key_bodies
         upper_key_bodies = self.cfg.motion.upper_key_bodies
         self._key_body_ids = self._build_body_ids_tensor(key_bodies)
@@ -82,7 +83,8 @@ class HumanoidChar(LeggedRobot):
                 camera_handle = self.gym.create_camera_sensor(self.envs[i], camera_props)
                 self._rendering_camera_handles.append(camera_handle)
                 self.gym.set_camera_location(camera_handle, self.envs[i], gymapi.Vec3(*cam_pos), gymapi.Vec3(*0*cam_pos))
-                
+
+    # 这个应该是用来进行截图的            
     def render_record(self, mode="rgb_array"):
         self.gym.step_graphics(self.sim)
         # self.gym.clear_lines(self.viewer)
@@ -110,6 +112,7 @@ class HumanoidChar(LeggedRobot):
             start_step = 5000 * 24  # Starting step for curriculum
             target_step = 20000 * 24  # Target step where probability reaches 0.5
             
+            # 逐步添加延迟的可能性
             if self.total_env_steps_counter <= start_step:
                 delay_prob = 0.0
             elif self.total_env_steps_counter >= target_step:
@@ -250,6 +253,7 @@ class HumanoidChar(LeggedRobot):
         self.last_root_pos[:] = self.root_states[:, 0:3]
         self.last_root_rot[:] = self.root_states[:, 3:7]
 
+        # 逐步增大正则化的奖励权重
         if self.cfg.rewards.regularization_scale_curriculum:
             if torch.mean(self.episode_length.float()).item()> 420.:
                 self.cfg.rewards.regularization_scale *= (1. + self.cfg.rewards.regularization_scale_gamma)
@@ -260,6 +264,7 @@ class HumanoidChar(LeggedRobot):
 
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             self.gym.clear_lines(self.viewer)
+            # 绘制机器人当前的关键点和参考动作的关键点
             self.draw_key_bodies_actual()
             self.draw_key_bodies_motion()
         
@@ -276,6 +281,7 @@ class HumanoidChar(LeggedRobot):
         if self.cfg.domain_rand.push_robots and  (self.common_step_counter % self.cfg.domain_rand.push_interval == 0):
             self._push_robots()
     
+    # 并没有调用
     def _randomize_gravity(self, external_force = None):
         if self.cfg.domain_rand.randomize_gravity and external_force is None:
             min_gravity, max_gravity = self.cfg.domain_rand.gravity_range
@@ -339,7 +345,7 @@ class HumanoidChar(LeggedRobot):
     def update_feet_force_sum(self):
         self.feet_force_sum += self.contact_forces[:, self.feet_indices, 2] * self.dt
         
-    def _get_noise_scale_vec(self, cfg):
+    def _get_noise__vec(self, cfg):
         noise_scale_vec = torch.zeros(1, self.cfg.env.n_proprio, device=self.device)
         if not self.cfg.noise.add_noise:
             return noise_scale_vec
@@ -362,6 +368,7 @@ class HumanoidChar(LeggedRobot):
                             self.reindex(self.dof_vel * self.obs_scales.dof_vel),
                             self.reindex(self.action_history_buf[:, -1]),
                             ),dim=-1)
+        # 在训练过程中，噪声会随着训练逐渐增大
         if self.cfg.noise.add_noise and self.headless:
             obs_buf += (2 * torch.rand_like(obs_buf) - 1) * self.noise_scale_vec * min(self.total_env_steps_counter / (self.cfg.noise.noise_increasing_steps * 24),  1.)
         elif self.cfg.noise.add_noise and not self.headless:
@@ -420,6 +427,7 @@ class HumanoidChar(LeggedRobot):
                 pose = gymapi.Transform(gymapi.Vec3(rigid_body_pos[id, i, 0], rigid_body_pos[id, i, 1], rigid_body_pos[id, i, 2]), r=None)
                 gymutil.draw_lines(geom, self.gym, self.viewer, self.envs[id], pose)
     
+    # 可视化body_pos
     def draw_key_bodies_motion(self):
         # color = (0, 1, 0)
         color = (0, 1, 1)
@@ -459,8 +467,8 @@ class HumanoidChar(LeggedRobot):
         #         gymutil.draw_lines(geom, self.gym, self.viewer, self.envs[id], pose)
 
         # draw global whole body
-        draw_gloabl = True
-        if draw_gloabl:
+        draw_global = False
+        if draw_global:
             # color = (0, 1, 1)
             color = (0, 1, 0)
             geom = gymutil.WireframeSphereGeometry(sphere_size, 32, 32, None, color=color)
@@ -505,7 +513,7 @@ class HumanoidChar(LeggedRobot):
             self.rew_buf += rew
             self.episode_sums["termination"] += rew
 
-                
+# 提高编译的效率，局部坐标系与世界坐标系之间的转换
 @torch.jit.script
 def convert_to_global_root_body_pos(root_pos, root_rot, body_pos):
     # type: (Tensor, Tensor, Tensor) -> Tensor

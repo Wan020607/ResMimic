@@ -65,7 +65,7 @@ def set_play_cfg(env_cfg):
     env_cfg.domain_rand.push_end_effector = False
     env_cfg.domain_rand.push_interval_s = 5
     env_cfg.domain_rand.max_push_vel_xy = 2.5
-    env_cfg.domain_rand.randomize_base_mass = False
+    env_cfg.domain_rand.randomize_base_mass = True
     env_cfg.domain_rand.randomize_base_com = False
     env_cfg.domain_rand.action_delay = False
     
@@ -157,6 +157,7 @@ def play(args):
 
         ppo_runner, train_cfg, log_pth = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args, train_cfg=train_cfg, return_log_dir=True)
         policy = ppo_runner.get_inference_policy(device=env.device)
+        # 这个设置为的是true
         if if_normalize:
             try:
                 normalizer = ppo_runner.get_normalizer(device=env.device)
@@ -211,7 +212,10 @@ def play(args):
                 normalized_obs = obs.detach()
             base_actions = base_policy_jit(full_obs_to_base_obs(env_cfg, obs.detach()))
             actions = policy(normalized_obs, hist_encoding=True) + base_actions
-            
+
+        # actions = base_actions.detach()
+        # actions = torch.zeros_like(actions)
+
         if "AMP" in env.__class__.__name__:
             obs, _, rews, dones, info0s, _, _ = env.step(actions.detach())
         else:

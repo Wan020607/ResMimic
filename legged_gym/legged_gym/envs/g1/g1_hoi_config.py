@@ -10,6 +10,8 @@ class G1HOICfg(G1MimicStuFutureCfg):
         object_asset_root = f'{LEGGED_GYM_ROOT_DIR}/assets'
         object_urdf_file = 'suitcase/suitcase.urdf'
         object_obj_file = 'suitcase/suitcase.obj'
+        # object_urdf_file = 'chair/chair.urdf'
+        # object_obj_file = 'chair/chair.obj'
 
         num_actors = 2
         nonblind = True
@@ -56,9 +58,19 @@ class G1HOICfg(G1MimicStuFutureCfg):
         object_mass = 4.0
         self_collisions = 0 # 1 to disable, 0 to enable...bitwise filter
 
+    class control(G1MimicStuFutureCfg.control):
+        kp_object = 15.0    #per kg
+        kd_object = 1.5     #per kg
+        max_torque_object = 100.0
+        max_force_object = 100.0
+        use_virtual_torque_curriculum = True
+        decay_scale = 0.7
+
+
     class rewards(G1MimicStuFutureCfg.rewards):
         termination_when_object_far = True
         termination_object_far_threshold = 0.3
+        virtual_force_update_threshold = 0.35
         class scales:
             tracking_joint_dof = 2.0
             tracking_joint_vel = 0.2
@@ -85,8 +97,8 @@ class G1HOICfg(G1MimicStuFutureCfg):
 
 class G1HOICfgDAgger(G1MimicStuFutureCfgDAgger):
     class runner(G1MimicStuFutureCfgDAgger.runner):
-        max_iterations = 500_000
-        save_interval = 100
+        max_iterations = 50_000
+        save_interval = 500
 
     class policy(G1MimicStuFutureCfgDAgger.policy):
         # init_noise_std = 1.0

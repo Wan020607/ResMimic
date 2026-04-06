@@ -24,13 +24,16 @@ class HumanoidMimic(HumanoidChar):
     def __init__(self, cfg: HumanoidMimicCfg, sim_params, physics_engine, sim_device, headless):
         self._enable_early_termination = cfg.env.enable_early_termination
         self._pose_termination = cfg.env.pose_termination
+        # 对于root和姿势跟随的termination误差阈值
         self._pose_termination_dist = cfg.env.pose_termination_dist
         self._root_tracking_termination_dist = cfg.env.root_tracking_termination_dist
+        # 追踪未来的时间步
         self._tar_motion_steps_priv = cfg.env.tar_motion_steps_priv
         self._tar_motion_steps_priv = torch.tensor(self._tar_motion_steps_priv, device=sim_device, dtype=torch.int)
         self._tar_motion_steps = cfg.env.tar_motion_steps
         self._tar_motion_steps = torch.tensor(self._tar_motion_steps, device=sim_device, dtype=torch.int)
         self._tar_motion_steps_idx_in_teacher = []
+        # 查询student当中的step在teacher中的索引
         for step in self._tar_motion_steps:
             idx = torch.where(self._tar_motion_steps_priv == step)[0]
             if len(idx) > 0:
@@ -44,7 +47,7 @@ class HumanoidMimic(HumanoidChar):
         self.global_obs = cfg.env.global_obs
         cprint(f"[HumanoidMimic] global_obs: {self.global_obs}")
         
-        
+        # 加载评价指标
         self.evaluations = class_to_dict(self.cfg.evaluations)
         self.eval_functions = []
         self.eval_names = []
@@ -62,6 +65,7 @@ class HumanoidMimic(HumanoidChar):
         self.episode_length = torch.zeros((self.num_envs), device=self.device)
         self.feet_height = torch.zeros((self.num_envs, 2), device=self.device)
         num_motions = self._motion_lib.num_motions()
+        # 初始化动作的难度
         self.motion_difficulty = 100 * torch.ones((num_motions), device=self.device, dtype=torch.float)
         self.mean_motion_difficulty = 100.
         self.motion_termination_dist = torch.ones((num_motions), device=self.device, dtype=torch.float) * self._pose_termination_dist
@@ -80,8 +84,10 @@ class HumanoidMimic(HumanoidChar):
         return max_len
         
     def _init_buffers(self):
+        # 加载动作库文件
         self._load_motions()
         # if self.viewer is None:
+        # 存储最大的动作时长
         self.max_episode_length_s = self._get_max_motion_len().item()
         self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt)
         super()._init_buffers()
@@ -108,15 +114,18 @@ class HumanoidMimic(HumanoidChar):
         self._ref_root_pos_delta_local = torch.zeros_like(self.root_states[:, 0:3])
         self._ref_root_rot_delta_local = torch.zeros_like(self.root_states[:, 3:6]) # euler angle
 
+        # 存储物体的参考位置和姿态
         self._ref_object_root_pos = torch.zeros_like(self.root_states[:, 0:3])
         self._ref_object_root_rot = torch.zeros_like(self.root_states[:, 3:7])
         
+        # 存储dof的权重
         self._dof_err_w = self.cfg.env.dof_err_w
         if self._dof_err_w is None:
             self._dof_err_w = torch.ones(self.num_dof, device=self.device, dtype=torch.float)
         else:
             self._dof_err_w = torch.tensor(self._dof_err_w, device=self.device, dtype=torch.float)
         
+        # 获取关键点的id
         self._key_body_ids_motion = self._motion_lib.get_key_body_idx(key_body_names=self.cfg.motion.key_bodies)
         # compare two tensors are same
         # assert torch.equal(self._key_body_ids, torch.tensor(key_body_ids_motion, device=self.device, dtype=torch.long)), \
@@ -135,6 +144,7 @@ class HumanoidMimic(HumanoidChar):
         self._motion_ids[env_ids] = motion_ids
         self._motion_time_offsets[env_ids] = motion_times
         
+
         root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, body_pos, root_pos_delta_local, root_rot_delta_local = self._motion_lib.calc_motion_frame(motion_ids, motion_times)
         root_pos[:, 2] += self.cfg.motion.height_offset
         
@@ -145,6 +155,7 @@ class HumanoidMimic(HumanoidChar):
         self._ref_root_ang_vel[env_ids] = root_ang_vel
         self._ref_dof_pos[env_ids] = dof_pos
         self._ref_dof_vel[env_ids] = dof_vel
+        # 将body_pos转换为全局坐标系，就是每个body相对于root的坐标系
         self._ref_body_pos[env_ids] = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
         
     
@@ -230,7 +241,7 @@ class HumanoidMimic(HumanoidChar):
         
    
         # vel_factor = 1.0
-        vel_factor = 0.8
+        vel_factor = 0.8        #相当于是初始化的时候有个相对减速的缩放因子
 
         # RSI
         self._reset_dofs(env_ids, self._ref_dof_pos, self._ref_dof_vel*vel_factor)
@@ -266,6 +277,7 @@ class HumanoidMimic(HumanoidChar):
             self.mean_motion_difficulty = torch.mean(self.motion_difficulty)
             
         _, _, y = euler_from_quaternion(self.root_states[:, 3:7])
+        # 获取初始化的yaw轴角度
         self.init_yaw[env_ids] = y[env_ids]
         return
     
@@ -323,7 +335,7 @@ class HumanoidMimic(HumanoidChar):
         # Higher difficulty -> larger termination distance (more lenient)
         # Lower difficulty -> smaller termination distance (more strict)
         # update pose termination distance
-        self.motion_termination_dist = (self._pose_termination_dist - 0.2) * motion_difficulty_ratio + 0.2 # (num_motions)
+        self.motion_termination_dist = (self._pose_termination_dist - 0.2) * motion_difficulty_ratio + 0.2 # (num_motions) 但这个实际上好像并没有用到
         # use min to avoid jittering of motion termination distance
         # self.motion_termination_dist = torch.min(new_motion_termination_dist, self.motion_termination_dist) # (num_motions)
         
@@ -379,6 +391,7 @@ class HumanoidMimic(HumanoidChar):
         height_cutoff = root_height_diff > self.cfg.rewards.root_height_diff_threshold
 
 
+        # 这里总感觉对有些动作会起到限制作用
         roll_cut = torch.abs(self.roll) > self.cfg.rewards.termination_roll
         pitch_cut = torch.abs(self.pitch) > self.cfg.rewards.termination_pitch
         self.reset_buf |= roll_cut
@@ -399,9 +412,11 @@ class HumanoidMimic(HumanoidChar):
         self.reset_buf |= vel_too_large
         
         if self._pose_termination:
+            # 获取关键点相对于body的坐标
             body_pos = self.rigid_body_states[:, self._key_body_ids, 0:3] - self.rigid_body_states[:, 0:1, 0:3]
             tar_body_pos = self._ref_body_pos[:, self._key_body_ids] - self._ref_root_pos[:, None, :] 
             
+            # 由于上述只是发生了平移，并没有考虑旋转，且不是在同一的全局坐标系下进行描述，所以需要考虑root坐标系的旋转对于body坐标的影响
             if not self.global_obs:
                 body_pos = convert_to_local_root_body_pos(self.root_states[:, 3:7], body_pos)
                 tar_body_pos = convert_to_local_root_body_pos(self._ref_root_rot, tar_body_pos)
@@ -422,7 +437,8 @@ class HumanoidMimic(HumanoidChar):
             
             # use an adaptive pose termination distance
             # pose_fail = body_pos_dist > self.motion_termination_dist[self._motion_ids] ** 2
-            
+
+            # 这里强调是否要track root
             if self._track_root:
                 root_pos_diff = self._ref_root_pos[:, 0:2] - self.root_states[:, 0:2]
                 root_pos_dist = torch.sum(root_pos_diff * root_pos_diff, dim=-1)

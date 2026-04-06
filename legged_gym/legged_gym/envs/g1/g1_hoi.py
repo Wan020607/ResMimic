@@ -4,8 +4,7 @@ from .g1_hoi_config import G1HOICfg
 
 import numpy as np
 from isaacgym.torch_utils import *
-from isaacgym import gymapi
-from isaacgym import gymtorch
+from isaacgym import gymtorch, gymapi, gymutil
 
 import trimesh
 import torch
@@ -20,10 +19,12 @@ from legged_gym.envs.base.legged_robot import euler_from_quaternion
 
 class G1HOI(G1MimicFuture):
     def __init__(self, cfg: G1HOICfg, sim_params, physics_engine, sim_device, headless):
+        # 对于需要将物体放在一个支撑上的动作，需要交互的物体就新增了搬运物和支撑物两个
         self.num_actors = cfg.env.num_actors
         self.all_actor_ids = torch.arange(self.num_actors * cfg.env.num_envs, device=sim_device, dtype=torch.int32).reshape(cfg.env.num_envs, self.num_actors)
         super().__init__(cfg, sim_params, physics_engine, sim_device, headless)
-    
+
+    # motion_decompose： 是否需要拆分成上下肢
     def _load_motions(self):
         self._motion_lib = MotionLibHOI(motion_file=self.cfg.motion.motion_file, 
                                      object_motion_file=self.cfg.motion.object_motion_file, device=self.device,
@@ -46,6 +47,7 @@ class G1HOI(G1MimicFuture):
         self._motion_ids[env_ids] = motion_ids
         self._motion_time_offsets[env_ids] = motion_times
         
+        # 这里新增了物体的旋转和位置
         root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, body_pos, root_pos_delta_local, root_rot_delta_local, object_root_pos, object_root_rot = self._motion_lib.calc_hoi_motion_frame(motion_ids, motion_times)
         root_pos[:, 2] += self.cfg.motion.height_offset
         self._ref_root_pos[env_ids] = root_pos
@@ -137,6 +139,7 @@ class G1HOI(G1MimicFuture):
                 local_offset = torch.zeros((len(env_ids), 3), device=self.device)
                 local_offset[:, 0] = rand_pos[:, 0]  # x offset
                 local_offset[:, 1] = rand_pos[:, 1]  # y offset
+                # 这里有一个固定的旋转offset
                 world_offset = quat_rotate_xyzw(torch.tensor([[0.0, 0.0, 0.3671609, 0.93015744]], device=self.device), local_offset)
                 self.object_root_states[env_ids, :3] += world_offset
                 
@@ -145,6 +148,7 @@ class G1HOI(G1MimicFuture):
                 self.object_root_states[env_ids, 3:7] = combined_quat
 
             if self.num_actors == 3:
+                # 这里这也是直接硬给的
                 self.support_root_states[env_ids, 0:7] = torch.tensor([0.0831, 0.6450, 0.5073, 0.0, 0.0, 0.3671609, 0.93015744], device=self.device)
                 self.support_root_states[env_ids, 0:3] += self.env_origins[env_ids]
         else:
@@ -152,6 +156,7 @@ class G1HOI(G1MimicFuture):
             self.root_states[env_ids, :3] += self.env_origins[env_ids]
         
         env_ids_int32 = self.all_actor_ids[env_ids].flatten().to(dtype=torch.int32)
+        # 改变整体位置和朝向
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.all_root_states),
                                                      gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
@@ -167,6 +172,71 @@ class G1HOI(G1MimicFuture):
                                               gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
 
 
+    def reset_idx(self, env_ids, motion_ids=None):
+        if len(env_ids) == 0:
+            return
+        
+        # fill extras
+        self.extras["episode"] = {}
+        for key in self.episode_sums.keys():
+            self.extras["episode"]['metric_' + key] = torch.mean(self.episode_sums[key][env_ids] / self._motion_lib.get_motion_length(self._motion_ids[env_ids]))
+            self.extras["episode"]['rew_' + key] = torch.mean(self.episode_sums[key][env_ids] * self.reward_scales[key] / self._motion_lib.get_motion_length(self._motion_ids[env_ids]))
+            self.episode_sums[key][env_ids] = 0.
+        
+        for key in self.episode_means.keys():
+            self.extras["episode"]['error_' + key] = torch.mean(self.episode_means[key][env_ids])
+            self.episode_means[key][env_ids] = 0.
+            
+        if self.cfg.motion.motion_curriculum:
+            self._update_motion_difficulty(env_ids)
+        self._reset_ref_motion(env_ids=env_ids, motion_ids=motion_ids)
+
+        # 添加一个虚拟力的课程学习
+        if self.cfg.control.use_virtual_torque_curriculum:
+            self._update_virtual_force_curriculum(env_ids)
+
+        # vel_factor = 1.0
+        vel_factor = 0.8        #相当于是初始化的时候有个相对减速的缩放因子
+
+        # RSI
+        self._reset_dofs(env_ids, self._ref_dof_pos, self._ref_dof_vel*vel_factor)
+        self._reset_root_states(env_ids=env_ids, root_vel=self._ref_root_vel*vel_factor, root_quat=self._ref_root_rot,
+                                root_pos=self._ref_root_pos, root_ang_vel=self._ref_root_ang_vel*vel_factor)
+
+        self.gym.simulate(self.sim)
+        self.gym.fetch_results(self.sim, True)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+
+        # reset buffers
+        self.last_actions[env_ids] = 0.
+        self.last_dof_vel[env_ids] = 0.
+        self.last_torques[env_ids] = 0.
+        self.last_root_vel[:] = 0.
+        self.feet_air_time[env_ids] = 0.
+        self.reset_buf[env_ids] = 1
+        self.obs_history_buf[env_ids, :, :] = 0.  # reset obs history buffer TODO no 0s
+        self.contact_buf[env_ids, :, :] = 0.
+        self.action_history_buf[env_ids, :, :] = 0.
+        self.feet_land_time[env_ids] = 0.
+        self.deviate_tracking_frames[env_ids] = 0.
+        self.deviate_vel_tracking_frames[env_ids] = 0.
+        self._reset_buffers_extra(env_ids)
+
+        self.episode_length_buf[env_ids] = 0
+        
+        # send timeout info to the algorithm
+        if self.cfg.env.send_timeouts:
+            self.extras["time_outs"] = self.time_out_buf
+        
+        if self.cfg.motion.motion_curriculum:
+            self.mean_motion_difficulty = torch.mean(self.motion_difficulty)
+            
+        _, _, y = euler_from_quaternion(self.root_states[:, 3:7])
+        # 获取初始化的yaw轴角度
+        self.init_yaw[env_ids] = y[env_ids]
+        return
+    
+    
     def _load_object_asset(self):
         object_asset_root = self.cfg.env.object_asset_root
         object_urdf_file = self.cfg.env.object_urdf_file
@@ -187,6 +257,7 @@ class G1HOI(G1MimicFuture):
 
         self.target_asset = self.gym.load_asset(self.sim, object_asset_root, object_urdf_file, asset_options)
 
+        # 将obj转换为mesh
         mesh_obj = trimesh.load(f"{object_asset_root}/{object_obj_file}", force='mesh')
         obj_verts = mesh_obj.vertices
         center = np.mean(obj_verts, 0)
@@ -196,9 +267,11 @@ class G1HOI(G1MimicFuture):
 
         while object_points.shape[0] < 1024:
             object_points = torch.cat([object_points, object_points[:1024 - object_points.shape[0]]], dim=0)
-        
+
+        # 获取物体的点云
         self.object_points = object_points
 
+        # 这个是设置一个支撑台
         if self.num_actors == 3:
             self.plate_size_x = 0.4   # meters
             self.plate_size_y = 0.3
@@ -315,10 +388,15 @@ class G1HOI(G1MimicFuture):
             # create objects in the environment
             default_pose = gymapi.Transform()
             
+            # 将物体设置在初始位置上
             object_handle = self.gym.create_actor(env_handle, self.target_asset, default_pose, "object", i, 0, 0)
 
             props = self.gym.get_actor_rigid_shape_properties(env_handle, object_handle)
+            # 设置物体的摩擦属性
             props = self._process_object_rigid_shape_props(props, i)
+            # rolling_friction： 滚动摩擦
+            # torsion_friction：扭转摩擦
+            # contact_offset：摩擦力提前在2mm的时候生效
             for p_idx in range(len(props)):
                 props[p_idx].restitution = 0.2
                 props[p_idx].rolling_friction = 0.01
@@ -330,11 +408,13 @@ class G1HOI(G1MimicFuture):
             if "box" in self.cfg.env.object_urdf_file:
                 for p_idx in range(len(props)):
                     props[p_idx].mass = self.cfg.asset.object_mass
+                # 随机化质量和质心
                 props = self._process_object_rigid_body_props(props, i)
                 assert self.gym.set_actor_rigid_body_properties(env_handle, object_handle, props)
             props = self.gym.get_actor_rigid_body_properties(env_handle, object_handle)
 
             self.object_handles.append(object_handle)
+            # 对物体进行一定比例的缩放，不过设置的范围比较小
             if self.cfg.domain_rand.randomize_object_scale:
                 rng_scale = self.cfg.domain_rand.object_scale_range
                 rand_scale = np.random.uniform(rng_scale[0], rng_scale[1], size=(1, ))
@@ -385,7 +465,17 @@ class G1HOI(G1MimicFuture):
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
-        
+
+        # 获取物品的id
+        object_name = self.gym.get_asset_rigid_body_names(self.target_asset)[0]
+        self.object_index = torch.zeros(self.num_envs, dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(self.num_envs):
+            self.object_index[i] = self.gym.find_actor_rigid_body_handle(
+                self.envs[i],          # 当前环境句柄
+                self.object_handles[i],  # object actor 句柄
+                object_name              # object actor 的名字
+            )
+
         if self.cfg.env.record_video:
             camera_props = gymapi.CameraProperties()
             camera_props.width = 720*2
@@ -406,6 +496,13 @@ class G1HOI(G1MimicFuture):
     
         self._w_prev = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
 
+        bodies_per_env = self.all_rigid_body_states.shape[1]
+        self.virtual_forces = torch.zeros(self.num_envs, bodies_per_env, 6, device=self.device, requires_grad=False)
+
+        # 虚拟力的kp和kd
+        self.kp_object = torch.full((self.num_envs, 1), self.cfg.control.kp_object, device=self.device, requires_grad=False) * self.cfg.asset.object_mass
+        self.kd_object = torch.full((self.num_envs, 1), self.cfg.control.kd_object, device=self.device, requires_grad=False) * self.cfg.asset.object_mass
+
     def _post_physics_step_callback(self):
         """ Callback called before computing terminations, rewards, and observations
             Default behaviour: Compute ang vel command based on target and heading, compute measured terrain heights and randomly push robots
@@ -414,11 +511,17 @@ class G1HOI(G1MimicFuture):
 
         if self.cfg.domain_rand.push_robots and  (self.common_step_counter % self.cfg.domain_rand.push_interval == 0):
             self._push_robots()
-        
+
+        # 这个是随机推送末端执行器
         if self.cfg.domain_rand.push_end_effector and (self.common_step_counter % self.cfg.domain_rand.push_end_effector_interval == 0):
             self._push_end_effector()
         else:
             self.forces = torch.zeros_like(self.forces)
+
+        if self.cfg.control.use_virtual_torque_curriculum:
+            self._push_object()
+        else:
+            self.virtual_forces = torch.zeros_like(self.virtual_forces)
             
         for i in range(len(self.eval_functions)):
             name = self.eval_names[i]
@@ -462,6 +565,7 @@ class G1HOI(G1MimicFuture):
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
 
         self.episode_length[env_ids] = self.episode_length_buf[env_ids].float()
+        # 多了一个这个，但好像没有什么作用
         self._w_prev[env_ids] = 0.
 
         self.reset_idx(env_ids)
@@ -486,6 +590,7 @@ class G1HOI(G1MimicFuture):
             self.gym.clear_lines(self.viewer)
             self.draw_key_bodies_actual()
             self.draw_key_bodies_motion()
+            self._draw_object_spheres()
 
 
     def step(self, actions):
@@ -812,7 +917,24 @@ class G1HOI(G1MimicFuture):
                 props[s].friction = 1.0
         return props
 
+    def _push_object(self):
+        # Implement the logic to process virtual object forces
+        max_force = self.cfg.control.max_force_object
+        max_torque = self.cfg.control.max_torque_object
+        virtual_force = self.kp_object * (self._ref_object_root_pos - self.object_root_states[:, :3]) - self.kd_object * self.object_root_states[:, 7:10]
+        rot_error = torch_utils.quat_to_exp_map(torch_utils.quat_diff(self.object_root_states[:, 3:7], self._ref_object_root_rot))
+        virtual_torque = self.kp_object * rot_error - self.kd_object * self.object_root_states[:, 10:13]
 
+        # 进行限制
+        virtual_force = torch.clamp(virtual_force, -max_force, max_force)
+        virtual_torque = torch.clamp(virtual_torque, -max_torque, max_torque)
+
+        self.virtual_forces[:, self.object_index, :3] = virtual_force
+        self.virtual_forces[:, self.object_index, 3:6] = virtual_torque
+
+        self.gym.apply_rigid_body_force_tensors(self.sim, gymtorch.unwrap_tensor(self.virtual_forces[:,:,:3].contiguous()), gymtorch.unwrap_tensor(self.virtual_forces[:,:,3:6].contiguous()), gymapi.GLOBAL_SPACE)
+
+    # 随机化物体的质量
     def _process_object_rigid_body_props(self, props, env_id):
         # No need to use tensors as only called upon env creation
         if self.cfg.domain_rand.randomize_object_mass:
@@ -828,3 +950,45 @@ class G1HOI(G1MimicFuture):
                 props[p_idx].com += gymapi.Vec3(*rand_com)
 
         return props
+    
+    # 绘制物体的球体
+    def _draw_object_spheres(self):
+        color = (1, 0, 0)
+        color_ref = (0, 1, 1)
+
+        if "g1" in self.__class__.__name__ or "G1" in self.__class__.__name__:
+            sphere_size = 0.04
+        elif "t1" in self.__class__.__name__ or "T1" in self.__class__.__name__:
+            sphere_size = 0.04
+        elif "toddy" in self.__class__.__name__ or "Toddy" in self.__class__.__name__:
+            sphere_size = 0.02
+        else:
+            sphere_size = 0.04
+
+        geom = gymutil.WireframeSphereGeometry(sphere_size, 32, 32, None, color=color)
+        geom_ref = gymutil.WireframeSphereGeometry(sphere_size, 32, 32, None, color=color_ref)
+        rigid_body_pos = self.object_root_states[:, :3].clone()
+        rigid_body_pos_ref = self._ref_object_root_pos.clone()
+        for id in range(self.num_envs):
+            pose = gymapi.Transform(gymapi.Vec3(rigid_body_pos[id, 0], rigid_body_pos[id, 1], rigid_body_pos[id, 2] + 1.0), r=None)
+            pose_ref = gymapi.Transform(gymapi.Vec3(rigid_body_pos_ref[id, 0], rigid_body_pos_ref[id, 1], rigid_body_pos_ref[id, 2] + 1.0), r=None)
+            gymutil.draw_lines(geom, self.gym, self.viewer, self.envs[id], pose)
+            gymutil.draw_lines(geom_ref, self.gym, self.viewer, self.envs[id], pose_ref)
+
+    # 虚拟力的课程
+    def _update_virtual_force_curriculum(self, env_ids):
+        # 获取指定环境的 tracking_object_point_cloud 奖励（按环境独立）
+        rewards = self.episode_sums["tracking_object_point_cloud"][env_ids] / self.max_episode_length
+
+        # 判断每个环境是否超过阈值
+        threshold = self.cfg.rewards.virtual_force_update_threshold * self.cfg.rewards.scales.tracking_object_point_cloud
+        mask_decay = rewards > threshold  # 布尔数组，表示哪些 env 需要衰减
+
+        # 对需要衰减的环境进行 PD 衰减
+        self.kp_object[env_ids][mask_decay] *= self.cfg.control.decay_scale
+        self.kd_object[env_ids][mask_decay] *= self.cfg.control.decay_scale
+
+        # 对衰减后小于 10 的，直接置为 0
+        mask_zero = self.kp_object[env_ids] < 10
+        self.kp_object[env_ids][mask_zero] = 0.0
+        self.kd_object[env_ids][mask_zero] = 0.0

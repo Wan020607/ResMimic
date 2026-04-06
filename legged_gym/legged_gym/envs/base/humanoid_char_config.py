@@ -46,7 +46,7 @@ class HumanoidCharCfg(BaseConfig):
 
         num_privileged_obs = None
 
-        env_spacing = 3.  # not used with heightfields/trimeshes 
+        env_spacing = 3.  # not used with heightfields/trimeshes 相邻智能体之间的间距
         send_timeouts = True # send time out information to the algorithm
         episode_length_s = 50
         

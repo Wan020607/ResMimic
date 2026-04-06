@@ -21,6 +21,7 @@ class G1MimicDistill(HumanoidMimic):
         self.episode_length = torch.zeros((self.num_envs), device=self.device)
         self.feet_height = torch.zeros((self.num_envs, 2), device=self.device)
         self.reset_idx(torch.tensor(range(self.num_envs), device=self.device))
+        # 这个相当于是在噪声处理的时候，学生已经有一个加大的噪声了
         if self.obs_type == 'student':
             self.total_env_steps_counter = 24 * 100000
             self.global_counter = 24 * 100000
@@ -38,6 +39,7 @@ class G1MimicDistill(HumanoidMimic):
         self._motion_ids[env_ids] = motion_ids
         self._motion_time_offsets[env_ids] = motion_times
         
+        # 新增加了一个root_pos_delta_local和root_rot_delta_local
         root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, body_pos, root_pos_delta_local, root_rot_delta_local = self._motion_lib.calc_motion_frame(motion_ids, motion_times)
         root_pos[:, 2] += self.cfg.motion.height_offset
         self._ref_root_pos[env_ids] = root_pos
@@ -167,11 +169,11 @@ class G1MimicDistill(HumanoidMimic):
             root_pos_delta_local, # 3 dims
             root_rot_delta_local, # 3 dims
             dof_pos, # num_dof dims
-            whole_key_body_pos if not self.global_obs else whole_key_body_pos_global,
+            whole_key_body_pos if not self.global_obs else whole_key_body_pos_global,   # 后续全部使用的是局部坐标系的
         ), dim=-1) # shape: (num_envs, num_steps, 21 + num_dof + num_key_bodies * 3)
         
         
-        # v0 - Modified for better observability
+        # v0 - Modified for better observability mimic真正的观测
         mimic_obs_buf = torch.cat((
             # root position: xy velocity + z position
             root_vel_local[..., :2], # 2 dims (xy velocity instead of xy position)
@@ -205,7 +207,7 @@ class G1MimicDistill(HumanoidMimic):
             proprio_obs_buf += 0.
         dof_vel_start_dim = 3 + 2 + self.dof_pos.shape[1]
 
-        # disable ankle dof velocity
+        # disable ankle dof velocity ？？？？
         ankle_idx = [4, 5, 10, 11]
         proprio_obs_buf[:, [dof_vel_start_dim + i for i in ankle_idx]] = 0.
         
