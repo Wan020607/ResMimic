@@ -175,7 +175,10 @@ class G1HOI(G1MimicFuture):
     def reset_idx(self, env_ids, motion_ids=None):
         if len(env_ids) == 0:
             return
-        
+        # 添加一个虚拟力的课程学习
+        if self.cfg.control.use_virtual_torque_curriculum:
+            self._update_virtual_force_curriculum(env_ids)
+    
         # fill extras
         self.extras["episode"] = {}
         for key in self.episode_sums.keys():
@@ -190,10 +193,6 @@ class G1HOI(G1MimicFuture):
         if self.cfg.motion.motion_curriculum:
             self._update_motion_difficulty(env_ids)
         self._reset_ref_motion(env_ids=env_ids, motion_ids=motion_ids)
-
-        # 添加一个虚拟力的课程学习
-        if self.cfg.control.use_virtual_torque_curriculum:
-            self._update_virtual_force_curriculum(env_ids)
 
         # vel_factor = 1.0
         vel_factor = 0.8        #相当于是初始化的时候有个相对减速的缩放因子
