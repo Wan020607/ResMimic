@@ -59,8 +59,8 @@ class G1HOICfg(G1MimicStuFutureCfg):
         self_collisions = 0 # 1 to disable, 0 to enable...bitwise filter
 
     class control(G1MimicStuFutureCfg.control):
-        kp_object = 15.0    #per kg
-        kd_object = 1.5     #per kg
+        kp_object = 80.0    #per kg
+        kd_object = 8.0   #per kg
         max_torque_object = 100.0
         max_force_object = 100.0
         use_virtual_torque_curriculum = True

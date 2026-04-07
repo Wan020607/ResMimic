@@ -263,7 +263,7 @@ class G1HOI(G1MimicFuture):
         center = np.mean(obj_verts, 0)
         object_points, object_faces = trimesh.sample.sample_surface_even(mesh_obj, count=1024, seed=2024)
 
-        object_points = to_torch(object_points - center)
+        object_points = to_torch(object_points - center, device=self.device)
 
         while object_points.shape[0] < 1024:
             object_points = torch.cat([object_points, object_points[:1024 - object_points.shape[0]]], dim=0)
@@ -368,6 +368,7 @@ class G1HOI(G1MimicFuture):
             if self.cfg.env.randomize_start_yaw:
                 rand_yaw_quat = gymapi.Quat.from_euler_zyx(0., 0., self.cfg.env.rand_yaw_range*np.random.uniform(-1, 1))
                 start_pose.r = rand_yaw_quat
+            # self.base_init_state[1] += 4.0
             start_pose.p = gymapi.Vec3(*(pos + self.base_init_state[:3]))
 
             rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
@@ -469,12 +470,15 @@ class G1HOI(G1MimicFuture):
         # 获取物品的id
         object_name = self.gym.get_asset_rigid_body_names(self.target_asset)[0]
         self.object_index = torch.zeros(self.num_envs, dtype=torch.long, device=self.device, requires_grad=False)
+        self.object_mass = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
         for i in range(self.num_envs):
             self.object_index[i] = self.gym.find_actor_rigid_body_handle(
                 self.envs[i],          # 当前环境句柄
                 self.object_handles[i],  # object actor 句柄
                 object_name              # object actor 的名字
             )
+            props = self.gym.get_actor_rigid_body_properties(self.envs[i], self.object_handles[i])
+            self.object_mass[i] = props[0].mass
 
         if self.cfg.env.record_video:
             camera_props = gymapi.CameraProperties()
@@ -500,8 +504,8 @@ class G1HOI(G1MimicFuture):
         self.virtual_forces = torch.zeros(self.num_envs, bodies_per_env, 6, device=self.device, requires_grad=False)
 
         # 虚拟力的kp和kd
-        self.kp_object = torch.full((self.num_envs, 1), self.cfg.control.kp_object, device=self.device, requires_grad=False) * self.cfg.asset.object_mass
-        self.kd_object = torch.full((self.num_envs, 1), self.cfg.control.kd_object, device=self.device, requires_grad=False) * self.cfg.asset.object_mass
+        self.kp_object = self.cfg.control.kp_object * self.object_mass.unsqueeze(1)
+        self.kd_object = self.cfg.control.kd_object * self.object_mass.unsqueeze(1)
 
     def _post_physics_step_callback(self):
         """ Callback called before computing terminations, rewards, and observations
@@ -517,11 +521,6 @@ class G1HOI(G1MimicFuture):
             self._push_end_effector()
         else:
             self.forces = torch.zeros_like(self.forces)
-
-        if self.cfg.control.use_virtual_torque_curriculum:
-            self._push_object()
-        else:
-            self.virtual_forces = torch.zeros_like(self.virtual_forces)
             
         for i in range(len(self.eval_functions)):
             name = self.eval_names[i]
@@ -633,6 +632,10 @@ class G1HOI(G1MimicFuture):
             self.gym.simulate(self.sim)
             self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
+            if self.cfg.control.use_virtual_torque_curriculum:
+                self._push_object()
+            else:
+                self.virtual_forces = torch.zeros_like(self.virtual_forces)
         
         self.post_physics_step()
 
@@ -924,15 +927,16 @@ class G1HOI(G1MimicFuture):
         virtual_force = self.kp_object * (self._ref_object_root_pos - self.object_root_states[:, :3]) - self.kd_object * self.object_root_states[:, 7:10]
         rot_error = torch_utils.quat_to_exp_map(torch_utils.quat_diff(self.object_root_states[:, 3:7], self._ref_object_root_rot))
         virtual_torque = self.kp_object * rot_error - self.kd_object * self.object_root_states[:, 10:13]
-
         # 进行限制
         virtual_force = torch.clamp(virtual_force, -max_force, max_force)
         virtual_torque = torch.clamp(virtual_torque, -max_torque, max_torque)
 
-        self.virtual_forces[:, self.object_index, :3] = virtual_force
-        self.virtual_forces[:, self.object_index, 3:6] = virtual_torque
+        env_ids = torch.arange(self.num_envs, device=self.device)
+        self.virtual_forces[env_ids, self.object_index, :3] = virtual_force
+        self.virtual_forces[env_ids, self.object_index, 3:6] = virtual_torque * 0.1
 
-        self.gym.apply_rigid_body_force_tensors(self.sim, gymtorch.unwrap_tensor(self.virtual_forces[:,:,:3].contiguous()), gymtorch.unwrap_tensor(self.virtual_forces[:,:,3:6].contiguous()), gymapi.GLOBAL_SPACE)
+        self.gym.apply_rigid_body_force_tensors(self.sim, gymtorch.unwrap_tensor(self.virtual_forces[:,:,:3].contiguous()), None, gymapi.GLOBAL_SPACE)
+        self.gym.apply_rigid_body_force_tensors(self.sim, None, gymtorch.unwrap_tensor(self.virtual_forces[:,:,3:6].contiguous()), gymapi.GLOBAL_SPACE)
 
     # 随机化物体的质量
     def _process_object_rigid_body_props(self, props, env_id):

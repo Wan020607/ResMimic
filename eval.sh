@@ -11,6 +11,6 @@ python play_residual.py --task "g1_hoi" \
                --wandb_run_id ${wandb_run_id} \
                --checkpoint ${wandb_checkpoint_iter} \
                --wandb_entity "$WANDB_ENTITY" \
-               --num_envs 1 \
+               --num_envs 4 \
                --device "cuda:0" \
                # --record_video \

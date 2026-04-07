@@ -65,7 +65,7 @@ def set_play_cfg(env_cfg):
     env_cfg.domain_rand.push_end_effector = False
     env_cfg.domain_rand.push_interval_s = 5
     env_cfg.domain_rand.max_push_vel_xy = 2.5
-    env_cfg.domain_rand.randomize_base_mass = True
+    env_cfg.domain_rand.randomize_base_mass = False
     env_cfg.domain_rand.randomize_base_com = False
     env_cfg.domain_rand.action_delay = False
     
