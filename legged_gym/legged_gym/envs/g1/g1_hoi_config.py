@@ -8,10 +8,12 @@ class G1HOICfg(G1MimicStuFutureCfg):
         rand_reset = False
         randomize_start_pos = False
         object_asset_root = f'{LEGGED_GYM_ROOT_DIR}/assets'
-        object_urdf_file = 'suitcase/suitcase.urdf'
-        object_obj_file = 'suitcase/suitcase.obj'
+        # object_urdf_file = 'suitcase/suitcase.urdf'
+        # object_obj_file = 'suitcase/suitcase.obj'
         # object_urdf_file = 'chair/chair.urdf'
         # object_obj_file = 'chair/chair.obj'
+        object_urdf_file = 'www_box/www_box.urdf'
+        object_obj_file = 'www_box/www_box.obj'
 
         num_actors = 2
         nonblind = True
@@ -23,14 +25,19 @@ class G1HOICfg(G1MimicStuFutureCfg):
 
     class motion(G1MimicStuFutureCfg.motion):
         # Use a working motion file
-        motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/kneel.pkl"
-        object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/kneel.npz"
+        # motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/kneel.pkl"
+        # object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/kneel.npz"
         # motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/squat.pkl"
         # object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/squat.npz"
-        # motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/carry.pkl"
-        # object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/carry.npz"
+        motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/carry.pkl"
+        object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/carry.npz"
         # motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/chair.pkl"
         # object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/chair.npz"
+        # motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/www_obj.pkl"
+        # object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/www_obj.npz"
+
+        key_bodies = ["left_wrist_yaw_link", "right_wrist_yaw_link", "left_ankle_roll_link", "right_ankle_roll_link", "left_knee_link", "right_knee_link", "left_elbow_link", "right_elbow_link", "torso_link"] # 9 key bodies
+        upper_key_bodies = ["left_wrist_yaw_link", "right_wrist_yaw_link", "left_elbow_link", "right_elbow_link", "torso_link"]
         
         # Ensure motion curriculum is enabled for difficulty adaptation
         motion_curriculum = False

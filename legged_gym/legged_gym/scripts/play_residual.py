@@ -39,6 +39,7 @@ from termcolor import cprint
 import wandb
 from pathlib import Path
 import numpy as np
+import time
 
 def get_load_path(root, load_run=-1, checkpoint=-1, model_name_include="jit"):
     if checkpoint==-1:
@@ -68,7 +69,8 @@ def set_play_cfg(env_cfg):
     env_cfg.domain_rand.randomize_base_mass = False
     env_cfg.domain_rand.randomize_base_com = False
     env_cfg.domain_rand.action_delay = False
-    
+    env_cfg.control.use_virtual_torque_curriculum = False
+
     if hasattr(env_cfg, "motion"):
         env_cfg.motion.motion_curriculum = False
     
@@ -213,8 +215,11 @@ def play(args):
             base_actions = base_policy_jit(full_obs_to_base_obs(env_cfg, obs.detach()))
             actions = policy(normalized_obs, hist_encoding=True) + base_actions
 
-        # actions = base_actions.detach()
+        actions = base_actions.detach()
         # actions = torch.zeros_like(actions)
+
+        # print("当前的关节角度为",env.dof_pos[0])
+        # print("当前的root_quat为",env.root_states[0, 3:7])
 
         if "AMP" in env.__class__.__name__:
             obs, _, rews, dones, info0s, _, _ = env.step(actions.detach())

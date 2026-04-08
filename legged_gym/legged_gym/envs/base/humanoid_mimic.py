@@ -1,7 +1,7 @@
 import numpy as np
 
 from isaacgym.torch_utils import *
-from isaacgym import gymtorch
+from isaacgym import gymtorch, gymapi, gymutil
 
 import torch
 
@@ -92,7 +92,7 @@ class HumanoidMimic(HumanoidChar):
         self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt)
         super()._init_buffers()
         self._init_motion_buffers()
-        
+
     def _load_motions(self):
         self._motion_lib = MotionLib(motion_file=self.cfg.motion.motion_file, device=self.device,
                                      sample_ratio=self.cfg.motion.sample_ratio,
@@ -108,7 +108,9 @@ class HumanoidMimic(HumanoidChar):
         self._ref_root_rot = torch.zeros_like(self.root_states[:, 3:7])
         self._ref_root_vel = torch.zeros_like(self.root_states[:, 7:10])
         self._ref_root_ang_vel = torch.zeros_like(self.root_states[:, 10:13])
-        self._ref_body_pos = torch.zeros_like(self.rigid_body_states[..., 0:3])
+        # 这里需要重新定义ref_body_pos的长度
+        # self._ref_body_pos = torch.zeros_like(self.rigid_body_states[..., 0:3])
+        self._ref_body_pos = torch.zeros((self.num_envs, len(self._motion_lib._body_link_list), 3), device=self.device, dtype=torch.float)
         self._ref_dof_pos = torch.zeros_like(self.dof_pos)
         self._ref_dof_vel = torch.zeros_like(self.dof_vel)
         self._ref_root_pos_delta_local = torch.zeros_like(self.root_states[:, 0:3])
@@ -127,6 +129,7 @@ class HumanoidMimic(HumanoidChar):
         
         # 获取关键点的id
         self._key_body_ids_motion = self._motion_lib.get_key_body_idx(key_body_names=self.cfg.motion.key_bodies)
+        self._key_foot_ids_motion = self._motion_lib.get_key_body_idx(key_body_names=self.feet_names)
         # compare two tensors are same
         # assert torch.equal(self._key_body_ids, torch.tensor(key_body_ids_motion, device=self.device, dtype=torch.long)), \
         #     f"Key body ids mismatch: {self._key_body_ids} vs {key_body_ids_motion}"
@@ -414,7 +417,8 @@ class HumanoidMimic(HumanoidChar):
         if self._pose_termination:
             # 获取关键点相对于body的坐标
             body_pos = self.rigid_body_states[:, self._key_body_ids, 0:3] - self.rigid_body_states[:, 0:1, 0:3]
-            tar_body_pos = self._ref_body_pos[:, self._key_body_ids] - self._ref_root_pos[:, None, :] 
+            # tar_body_pos = self._ref_body_pos[:, self._key_body_ids] - self._ref_root_pos[:, None, :] 
+            tar_body_pos = self._ref_body_pos[:, self._key_body_ids_motion] - self._ref_root_pos[:, None, :] 
             
             # 由于上述只是发生了平移，并没有考虑旋转，且不是在同一的全局坐标系下进行描述，所以需要考虑root坐标系的旋转对于body坐标的影响
             if not self.global_obs:
@@ -579,6 +583,57 @@ class HumanoidMimic(HumanoidChar):
         noise_scale_vec[:, noise_start_dim+(ang_vel_dim+imu_dim)+self.num_dof:noise_start_dim+(ang_vel_dim+imu_dim)+2*self.num_dof] = self.cfg.noise.noise_scales.dof_vel
         return noise_scale_vec
     
+        # 可视化body_pos
+    def draw_key_bodies_motion(self):
+        # color = (0, 1, 0)
+        color = (0, 1, 1)
+        
+        if "g1" in self.__class__.__name__ or "G1" in self.__class__.__name__:
+            sphere_size = 0.04
+        elif "t1" in self.__class__.__name__ or "T1" in self.__class__.__name__:
+            sphere_size = 0.04
+        elif "toddy" in self.__class__.__name__ or "Toddy" in self.__class__.__name__:
+            sphere_size = 0.02
+        else:
+            sphere_size = 0.04
+            
+        geom = gymutil.WireframeSphereGeometry(sphere_size, 32, 32, None, color=color)
+        ref_key_body_pos = self._ref_body_pos[:, self._key_body_ids_motion, :3] - self._ref_root_pos[:, None, :]
+        ref_key_body_pos_local = convert_to_local_root_body_pos(self._ref_root_rot, ref_key_body_pos)
+        draw_root_pos = self.root_states[:, :3].clone()
+        draw_root_pos[:, 2] = self._ref_root_pos[:, 2]
+        ref_roll, ref_pitch, _ = euler_from_quaternion(self._ref_root_rot)
+        draw_root_rot = quat_from_euler_xyz(ref_roll, ref_pitch, self.yaw)
+        ref_key_body_pos_global = convert_to_global_root_body_pos(root_pos=draw_root_pos, root_rot=draw_root_rot, body_pos=ref_key_body_pos_local)
+        for id in range(self.num_envs):
+            for i in range(ref_key_body_pos.shape[1]):
+                pose = gymapi.Transform(gymapi.Vec3(ref_key_body_pos_global[id, i, 0], ref_key_body_pos_global[id, i, 1], ref_key_body_pos_global[id, i, 2]), r=None)
+                gymutil.draw_lines(geom, self.gym, self.viewer, self.envs[id], pose)
+        
+        # # draw local upper key bodies
+        # geom = gymutil.WireframeSphereGeometry(0.04, 32, 32, None, color=(0, 0, 1))
+        # upper_key_body_pos = self._ref_body_pos[:, self._upper_key_body_ids, :3] - self._ref_root_pos[:, None, :]
+        # upper_key_body_pos_local = convert_to_local_root_body_pos(self._ref_root_rot, upper_key_body_pos)
+        # draw_root_pos = self.root_states[:, :3].clone()
+        # draw_root_pos[:, 2] = self._ref_root_pos[:, 2]
+        # upper_key_body_pos_global = convert_to_global_root_body_pos(root_pos=draw_root_pos, root_rot=self.root_states[:, 3:7], body_pos=upper_key_body_pos_local)
+        # for id in range(self.num_envs):
+        #     for i in range(upper_key_body_pos.shape[1]):
+        #         pose = gymapi.Transform(gymapi.Vec3(upper_key_body_pos_global[id, i, 0], upper_key_body_pos_global[id, i, 1], upper_key_body_pos_global[id, i, 2]), r=None)
+        #         gymutil.draw_lines(geom, self.gym, self.viewer, self.envs[id], pose)
+
+        # draw global whole body
+        draw_global = False
+        if draw_global:
+            # color = (0, 1, 1)
+            color = (0, 1, 0)
+            geom = gymutil.WireframeSphereGeometry(sphere_size, 32, 32, None, color=color)
+            ref_key_body_pos = self._ref_body_pos[:, self._key_body_ids_motion, :3]        
+            for id in range(self.num_envs):
+                for i in range(ref_key_body_pos.shape[1]):
+                    pose = gymapi.Transform(gymapi.Vec3(ref_key_body_pos[id, i, 0], ref_key_body_pos[id, i, 1], ref_key_body_pos[id, i, 2]), r=None)
+                    gymutil.draw_lines(geom, self.gym, self.viewer, self.envs[id], pose)
+    
     
     # ================== rewards ==================
     def _reward_alive(self):
@@ -725,7 +780,8 @@ class HumanoidMimic(HumanoidChar):
         
         # key_body_pos = convert_to_local_root_body_pos(self.root_states[:, 3:7], key_body_pos)
         key_body_pos = convert_to_local_root_body_pos(base_yaw_quat, key_body_pos)
-        tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids, :]
+        # tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids, :]
+        tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids_motion, :]
         tar_key_body_pos = tar_key_body_pos - self._ref_root_pos.unsqueeze(1)
         _, _, ref_yaw = euler_from_quaternion(self._ref_root_rot)
         ref_yaw_quat = quat_from_euler_xyz(0*ref_yaw, 0*ref_yaw, ref_yaw)
@@ -743,7 +799,8 @@ class HumanoidMimic(HumanoidChar):
         key_body_pos = self.rigid_body_states[:, self._key_body_ids, 0:3] # (num_envs, num_key_bodies, 3)
         # key_body_pos = key_body_pos - self.root_states[:, 0:3].unsqueeze(1)
         
-        tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids, :]
+        # tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids, :]
+        tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids_motion, :]
         # tar_key_body_pos = tar_key_body_pos - self._ref_root_pos.unsqueeze(1)
         
         key_body_pos_diff = key_body_pos - tar_key_body_pos
@@ -755,7 +812,7 @@ class HumanoidMimic(HumanoidChar):
     
     def _reward_tracking_feet_height(self):
         contact = self.contact_forces[:, self.feet_indices, 2] > 5.
-        ref_feet_height = self._ref_body_pos[:, self.feet_indices, 2]
+        ref_feet_height = self._ref_body_pos[:, self._key_foot_ids_motion, 2]
         feet_z = self.rigid_body_states[:, self.feet_indices, 2]
         
         delta_z = feet_z - self.last_feet_z
@@ -899,7 +956,8 @@ class HumanoidMimic(HumanoidChar):
             base_yaw_quat = quat_from_euler_xyz(0*self.yaw, 0*self.yaw, self.yaw)
             # key_body_pos = convert_to_local_root_body_pos(self.root_states[:, 3:7], key_body_pos)
             key_body_pos = convert_to_local_root_body_pos(base_yaw_quat, key_body_pos)
-        tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids, :]
+        # tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids, :]
+        tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids_motion, :]
         tar_key_body_pos = tar_key_body_pos - self._ref_root_pos.unsqueeze(1)
         if not self.global_obs:
             _, _, ref_yaw = euler_from_quaternion(self._ref_root_rot)
@@ -914,7 +972,8 @@ class HumanoidMimic(HumanoidChar):
         key_body_pos = self.rigid_body_states[:, self._key_body_ids, 0:3] # (num_envs, num_key_bodies, 3)
         # key_body_pos = key_body_pos - self.root_states[:, 0:3].unsqueeze(1)
         
-        tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids, :]
+        # tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids, :]
+        tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids_motion, :]
         # tar_key_body_pos = tar_key_body_pos - self._ref_root_pos.unsqueeze(1)
         
         key_body_pos_diff = key_body_pos - tar_key_body_pos

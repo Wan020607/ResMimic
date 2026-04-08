@@ -111,6 +111,53 @@ def load_and_inspect(file_path):
     print("========== 数据结构 ==========\n")
     print_structure(data)
 
+    # 针对 pkl 和 npz 文件打印特定数据
+    # =========================
+    if file_path.endswith(".pkl") and isinstance(data, dict):
+        if "root_rot" in data:
+            root_rot = data["root_rot"]
+            if isinstance(root_rot, (list, np.ndarray, torch.Tensor)) and len(root_rot) > 0:
+                print("\n========== PKL: Root Rotation (Frame 0) ==========\n")
+                print("root_rot[0] =", root_rot[0])
+        else:
+            print("未在 PKL 中找到 root_rot")
+
+    elif file_path.endswith(".npz") and isinstance(data, dict):
+        if "joint_pos" in data:
+            joint_pos = data["joint_pos"]
+            # 有些 npz 是 ndarray(object)
+            if isinstance(joint_pos, np.ndarray) and joint_pos.dtype == object:
+                joint_pos = joint_pos.tolist()
+            if len(joint_pos) > 0:
+                print("\n========== NPZ: joint_pos (Frame 0) ==========\n")
+                print(joint_pos[0])
+        else:
+            print("未在 NPZ 中找到 joint_pos")
+
+    # if file_path.endswith(".npz") and isinstance(data, dict):
+    #     if "joint_names" in data:
+    #         joint_names = data["joint_names"]
+    #         # 有些 npz 是 ndarray(object)
+    #     if isinstance(joint_names, np.ndarray):
+    #         joint_names = joint_names.tolist()
+
+    #     print("来自 NPZ: joint_names")
+    #     for i, name in enumerate(joint_names):
+    #         print(f"{i}: {name}")
+
+    # else:
+    #     print("未找到 joint_names 或 link_body_list")
+
+    if file_path.endswith(".npz") and isinstance(data, dict):
+        if "qpos" in data:
+            qpos = data["qpos"]
+            # 有些 npz 是 ndarray(object)
+        if isinstance(qpos, np.ndarray):
+            qpos = qpos.tolist()
+        if len(qpos) > 0:
+            print("\n========== NPZ: qpos (Frame 0) ==========\n")
+            print(qpos[0][7:36])
+
     # ====== 统一打印 body names ======
     print("\n========== Body Names ==========\n")
 
@@ -139,5 +186,5 @@ def load_and_inspect(file_path):
 # 4. 入口
 # =========================
 if __name__ == "__main__":
-    file_path = "sub3_largebox_003_beyondmimic_w_obj.npz"  # 改成你的路径
+    file_path = "1_original.npz"  # 改成你的路径
     load_and_inspect(file_path)

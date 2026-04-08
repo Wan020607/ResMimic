@@ -163,7 +163,9 @@ class G1HOI(G1MimicFuture):
 
     
     def _reset_dofs(self, env_ids, dof_pos, dof_vel):
-        self.dof_pos[env_ids] = dof_pos[env_ids] * torch_rand_float(0.8, 1.2, (len(env_ids), self.num_dof), device=self.device)
+        # self.dof_pos[env_ids] = dof_pos[env_ids] * torch_rand_float(0.8, 1.2, (len(env_ids), self.num_dof), device=self.device)
+        self.dof_pos[env_ids] = dof_pos[env_ids]
+        print("设置的关节角度为",self.dof_pos[0])
         self.dof_vel[env_ids] = dof_vel[env_ids]
 
         env_ids_int32 = self.all_actor_ids[env_ids, 0].to(dtype=torch.int32)
@@ -198,9 +200,9 @@ class G1HOI(G1MimicFuture):
         vel_factor = 0.8        #相当于是初始化的时候有个相对减速的缩放因子
 
         # RSI
-        self._reset_dofs(env_ids, self._ref_dof_pos, self._ref_dof_vel*vel_factor)
         self._reset_root_states(env_ids=env_ids, root_vel=self._ref_root_vel*vel_factor, root_quat=self._ref_root_rot,
                                 root_pos=self._ref_root_pos, root_ang_vel=self._ref_root_ang_vel*vel_factor)
+        self._reset_dofs(env_ids, self._ref_dof_pos, self._ref_dof_vel*vel_factor)
 
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
@@ -319,9 +321,10 @@ class G1HOI(G1MimicFuture):
         # save body names from the asset
         body_names = self.gym.get_asset_rigid_body_names(robot_asset)
         self.dof_names = self.gym.get_asset_dof_names(robot_asset)
+        print("当前的dof名称为:", self.dof_names)
         self.num_bodies = len(body_names)
         self.num_dofs = len(self.dof_names)
-        feet_names = [s for s in body_names if self.cfg.asset.foot_name in s]
+        self.feet_names = [s for s in body_names if self.cfg.asset.foot_name in s]
         self.torso_idx = self.gym.find_asset_rigid_body_index(robot_asset, self.cfg.asset.torso_name)
         self.chest_idx = self.gym.find_asset_rigid_body_index(robot_asset, self.cfg.asset.chest_name)
 
@@ -367,7 +370,7 @@ class G1HOI(G1MimicFuture):
             if self.cfg.env.randomize_start_yaw:
                 rand_yaw_quat = gymapi.Quat.from_euler_zyx(0., 0., self.cfg.env.rand_yaw_range*np.random.uniform(-1, 1))
                 start_pose.r = rand_yaw_quat
-            # self.base_init_state[1] += 4.0
+            self.base_init_state[1] += 4.0
             start_pose.p = gymapi.Vec3(*(pos + self.base_init_state[:3]))
 
             rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
@@ -443,11 +446,11 @@ class G1HOI(G1MimicFuture):
         self.body_names = body_names
         self._get_body_indices()
 
-        self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
-        for i in range(len(feet_names)):
-            self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], feet_names[i])
-        
-        
+        self.feet_indices = torch.zeros(len(self.feet_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(self.feet_names)):
+            self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], self.feet_names[i])
+
+
         waist_names = self.cfg.asset.waist_name
         self.waist_indices = torch.zeros(len(waist_names), dtype=torch.long, device=self.device, requires_grad=False)
         for j in range(len(waist_names)):
@@ -631,10 +634,10 @@ class G1HOI(G1MimicFuture):
             self.gym.simulate(self.sim)
             self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
-            if self.cfg.control.use_virtual_torque_curriculum:
-                self._push_object()
-            else:
-                self.virtual_forces = torch.zeros_like(self.virtual_forces)
+            # if self.cfg.control.use_virtual_torque_curriculum:
+            #     self._push_object()
+            # else:
+            #     self.virtual_forces = torch.zeros_like(self.virtual_forces)
         
         self.post_physics_step()
 
@@ -828,8 +831,9 @@ class G1HOI(G1MimicFuture):
         
         if self._pose_termination:
             body_pos = self.rigid_body_states[:, self._key_body_ids, 0:3] - self.rigid_body_states[:, 0:1, 0:3]
-            tar_body_pos = self._ref_body_pos[:, self._key_body_ids] - self._ref_root_pos[:, None, :] 
-            
+            # tar_body_pos = self._ref_body_pos[:, self._key_body_ids] - self._ref_root_pos[:, None, :]
+            tar_body_pos = self._ref_body_pos[:, self._key_body_ids_motion] - self._ref_root_pos[:, None, :]
+
             if not self.global_obs:
                 body_pos = convert_to_local_root_body_pos(self.root_states[:, 3:7], body_pos)
                 tar_body_pos = convert_to_local_root_body_pos(self._ref_root_rot, tar_body_pos)
