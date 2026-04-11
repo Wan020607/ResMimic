@@ -201,7 +201,7 @@ def play(args):
     else:
         traj_length = 2 * int(env.max_episode_length)
     
-    traj_length = 400
+    traj_length = 1200
 
     for i in tqdm(range(traj_length)):
         if args.use_jit:

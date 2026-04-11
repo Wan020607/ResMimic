@@ -163,9 +163,7 @@ class G1HOI(G1MimicFuture):
 
     
     def _reset_dofs(self, env_ids, dof_pos, dof_vel):
-        # self.dof_pos[env_ids] = dof_pos[env_ids] * torch_rand_float(0.8, 1.2, (len(env_ids), self.num_dof), device=self.device)
-        self.dof_pos[env_ids] = dof_pos[env_ids]
-        print("设置的关节角度为",self.dof_pos[0])
+        self.dof_pos[env_ids] = dof_pos[env_ids] * torch_rand_float(0.8, 1.2, (len(env_ids), self.num_dof), device=self.device)
         self.dof_vel[env_ids] = dof_vel[env_ids]
 
         env_ids_int32 = self.all_actor_ids[env_ids, 0].to(dtype=torch.int32)
@@ -178,7 +176,7 @@ class G1HOI(G1MimicFuture):
         if len(env_ids) == 0:
             return
         # 添加一个虚拟力的课程学习
-        if self.cfg.control.use_virtual_torque_curriculum:
+        if self.cfg.control.use_virtual_torque_curriculum and (self.common_step_counter % (self.max_episode_length / 2)==0):
             self._update_virtual_force_curriculum(env_ids)
     
         # fill extras
@@ -191,7 +189,8 @@ class G1HOI(G1MimicFuture):
         for key in self.episode_means.keys():
             self.extras["episode"]['error_' + key] = torch.mean(self.episode_means[key][env_ids])
             self.episode_means[key][env_ids] = 0.
-            
+        
+        # 按次数更新课程
         if self.cfg.motion.motion_curriculum:
             self._update_motion_difficulty(env_ids)
         self._reset_ref_motion(env_ids=env_ids, motion_ids=motion_ids)
@@ -200,9 +199,9 @@ class G1HOI(G1MimicFuture):
         vel_factor = 0.8        #相当于是初始化的时候有个相对减速的缩放因子
 
         # RSI
+        self._reset_dofs(env_ids, self._ref_dof_pos, self._ref_dof_vel*vel_factor)
         self._reset_root_states(env_ids=env_ids, root_vel=self._ref_root_vel*vel_factor, root_quat=self._ref_root_rot,
                                 root_pos=self._ref_root_pos, root_ang_vel=self._ref_root_ang_vel*vel_factor)
-        self._reset_dofs(env_ids, self._ref_dof_pos, self._ref_dof_vel*vel_factor)
 
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
@@ -370,7 +369,7 @@ class G1HOI(G1MimicFuture):
             if self.cfg.env.randomize_start_yaw:
                 rand_yaw_quat = gymapi.Quat.from_euler_zyx(0., 0., self.cfg.env.rand_yaw_range*np.random.uniform(-1, 1))
                 start_pose.r = rand_yaw_quat
-            self.base_init_state[1] += 4.0
+            # self.base_init_state[1] += 4.0
             start_pose.p = gymapi.Vec3(*(pos + self.base_init_state[:3]))
 
             rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
@@ -634,10 +633,10 @@ class G1HOI(G1MimicFuture):
             self.gym.simulate(self.sim)
             self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
-            # if self.cfg.control.use_virtual_torque_curriculum:
-            #     self._push_object()
-            # else:
-            #     self.virtual_forces = torch.zeros_like(self.virtual_forces)
+            if self.cfg.control.use_virtual_torque_curriculum:
+                self._push_object()
+            else:
+                self.virtual_forces = torch.zeros_like(self.virtual_forces)
         
         self.post_physics_step()
 
@@ -985,17 +984,17 @@ class G1HOI(G1MimicFuture):
     # 虚拟力的课程
     def _update_virtual_force_curriculum(self, env_ids):
         # 获取指定环境的 tracking_object_point_cloud 奖励（按环境独立）
-        rewards = self.episode_sums["tracking_object_point_cloud"][env_ids] / self.max_episode_length
+        raw_rewards = self.episode_sums["tracking_object_point_cloud"][env_ids] / self.episode_length_buf[env_ids]
+        rewards = torch.where(self.episode_length_buf[env_ids] > 0.5 * self.max_episode_length, raw_rewards, torch.zeros_like(raw_rewards))
 
         # 判断每个环境是否超过阈值
         threshold = self.cfg.rewards.virtual_force_update_threshold * self.cfg.rewards.scales.tracking_object_point_cloud
-        mask_decay = rewards > threshold  # 布尔数组，表示哪些 env 需要衰减
 
-        # 对需要衰减的环境进行 PD 衰减
-        self.kp_object[env_ids][mask_decay] *= self.cfg.control.decay_scale
-        self.kd_object[env_ids][mask_decay] *= self.cfg.control.decay_scale
-
-        # 对衰减后小于 10 的，直接置为 0
-        mask_zero = self.kp_object[env_ids] < 10
-        self.kp_object[env_ids][mask_zero] = 0.0
-        self.kd_object[env_ids][mask_zero] = 0.0
+        if (torch.mean(rewards) > threshold):
+            # 对需要衰减的环境进行 PD 衰减
+            self.kp_object *= self.cfg.control.decay_scale
+            self.kd_object *= self.cfg.control.decay_scale
+            # 对衰减后小于 10 的，直接置为 0
+            mask_zero = self.kp_object < 10
+            self.kp_object[mask_zero] = 0.0
+            self.kd_object[mask_zero] = 0.0

@@ -8,12 +8,12 @@ class G1HOICfg(G1MimicStuFutureCfg):
         rand_reset = False
         randomize_start_pos = False
         object_asset_root = f'{LEGGED_GYM_ROOT_DIR}/assets'
-        # object_urdf_file = 'suitcase/suitcase.urdf'
-        # object_obj_file = 'suitcase/suitcase.obj'
+        object_urdf_file = 'suitcase/suitcase.urdf'
+        object_obj_file = 'suitcase/suitcase.obj'
         # object_urdf_file = 'chair/chair.urdf'
         # object_obj_file = 'chair/chair.obj'
-        object_urdf_file = 'www_box/www_box.urdf'
-        object_obj_file = 'www_box/www_box.obj'
+        # object_urdf_file = 'www_box/www_box.urdf'
+        # object_obj_file = 'www_box/www_box.obj'
 
         num_actors = 2
         nonblind = True
@@ -25,12 +25,12 @@ class G1HOICfg(G1MimicStuFutureCfg):
 
     class motion(G1MimicStuFutureCfg.motion):
         # Use a working motion file
-        # motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/kneel.pkl"
-        # object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/kneel.npz"
+        motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/kneel.pkl"
+        object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/kneel.npz"
         # motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/squat.pkl"
         # object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/squat.npz"
-        motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/carry.pkl"
-        object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/carry.npz"
+        # motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/carry.pkl"
+        # object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/carry.npz"
         # motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/chair.pkl"
         # object_motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/chair.npz"
         # motion_file = f"{LEGGED_GYM_ROOT_DIR}/assets/motions/www_obj.pkl"
@@ -77,7 +77,7 @@ class G1HOICfg(G1MimicStuFutureCfg):
     class rewards(G1MimicStuFutureCfg.rewards):
         termination_when_object_far = True
         termination_object_far_threshold = 0.3
-        virtual_force_update_threshold = 0.35
+        virtual_force_update_threshold = 0.3
         class scales:
             tracking_joint_dof = 2.0
             tracking_joint_vel = 0.2
@@ -104,8 +104,8 @@ class G1HOICfg(G1MimicStuFutureCfg):
 
 class G1HOICfgDAgger(G1MimicStuFutureCfgDAgger):
     class runner(G1MimicStuFutureCfgDAgger.runner):
-        max_iterations = 50_000
-        save_interval = 500
+        max_iterations = 10_000
+        save_interval = 100
 
     class policy(G1MimicStuFutureCfgDAgger.policy):
         # init_noise_std = 1.0

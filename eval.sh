@@ -5,12 +5,12 @@ WANDB_ENTITY=${3}
 
 # Run the evaluation script
 python play_residual.py --task "g1_hoi" \
-               --proj_name "resmimic_suitcase" \
+               --proj_name "box_task" \
                --teacher_exptid "None" \
-               --exptid "suitcase" \
+               --exptid "box" \
                --wandb_run_id ${wandb_run_id} \
                --checkpoint ${wandb_checkpoint_iter} \
                --wandb_entity "$WANDB_ENTITY" \
-               --num_envs 4 \
+               --num_envs 1 \
                --device "cuda:0" \
                # --record_video \
